@@ -19,7 +19,7 @@ always @(*) begin//state machine
     case(CSmode)
     0:begin//idle
         if(workstate)begin//如果開始有資料傳進來 根據PE所在相對位置判斷該是甚麼工作狀態(OS or WS)
-            if(penumx%sizex <= (kernelsize*kernelsize))begin//OS
+            if((penumx%sizex <= (kernelsize*kernelsize)) && (penumy%sizey <= (kernelsize*kernelsize)))begin//OS
                 NSmode = 7;
             end else if((sizey-(penumy%sizey)) <= kernelsize) begin//下方WS
                 NSmode = 2;
@@ -137,6 +137,13 @@ always @(posedge clk or posedge reset) begin//PE操作
                 output_right[7:0] <= input_left[7:0];
             end
         end
+    end else if(CSmode==0)begin
+        result <= 0;
+        weight <= 0;
+        output_right <= 0 ;
+        output_left <= 0;
+        output_down <= 0;
+        output_up <= 0;
     end else begin
         result <= result;
         weight <= weight;
@@ -149,7 +156,7 @@ end
 
 endmodule
 
-module PE_tsv(input_left,input_right,input_up,input_down,output_left,output_right,output_up,output_down,workstate,clk,tsv_in,tsv_out,reset,penumx,penumy,sizex,sizey,kernelsize,result);//有接上TSV通道的PE 但也可能沒有TSV輸入而是做為裡面的PE
+module PE_tsv(input_left,input_right,input_up,input_down,output_left,output_right,output_up,output_down,workstate,clk,tsv_in,,tsv_out,reset,penumx,penumy,sizex,sizey,kernelsize,result);//有接上TSV通道的PE 但也可能沒有TSV輸入而是做為裡面的PE
 /*
 mode0 = idle
 mode1 = OS
@@ -171,8 +178,8 @@ always @(*) begin//state machine
     case(CSmode)
     0:begin//idle
         if(workstate)begin//如果開始有資料傳進來 根據PE所在相對位置判斷該是甚麼工作狀態(OS or WS)
-            if(penumx%sizex <= (kernelsize*kernelsize))begin//OS
-                if((penumx%sizex == 1) || (penumx%sizex == 1))begin
+            if((penumx%sizex <= (kernelsize*kernelsize)) && (penumy%sizey <= (kernelsize*kernelsize)))begin//OS
+                if((penumx%sizex ==1) || (penumy%sizey ==1))begin//OS
                     NSmode = 2;
                 end else begin
                     NSmode = 1;
@@ -258,17 +265,39 @@ always @(posedge clk or posedge reset) begin//PE operation
         output_left <= 0;
         output_down <= 0;
         output_up <= 0;
-    end else if(CSmode==0) begin 
+    end else if(CSmode==0)begin//idle
+        result <= 0;
+        weight <= 0;
+        output_right <= 0 ;
+        output_left <= 0;
+        output_down <= 0;
+        output_up <= 0;
+    end else if(CSmode==1) begin//OS 
         output_right[7:0] <= input_left[7:0];
         output_right[24:8] <= input_left[7:0]*input_up+input_left[24:8];
         output_down <= input_up;
-    end else if(CSmode==1) begin
+    end else if(CSmode==2)begin
+        if((penumx%sizex ==1) || (penumy%sizey ==1))begin//如果是最左上那個PE
+            // 幹這裡好像要接兩個TSV才行耶 但要統一的話是不是所有TSV都要有兩個TSV
+        end else begin
+            if((penumx%sizex==1))begin//左方OS第一個PE TSV吃input
+                output_right[7:0] <= tsv_in;
+                output_right[24:8] <= tsv_in*input_up+input_left[24:8];
+                output_down <= input_up;//傳送weight
+            end else begin//上方OS第一個PE TSV吃weight
+                output_down <= tsv_in;
+                output_right[7:0] <= input_left[7:0];
+                output_right[24:8] <= input_left[7:0]*tsv_in+input_left[24:8];
+            end
+        end
+        
+    end else if(CSmode==3) begin//WS load from right
         weight <= input_right;
         output_left <= input_right;
-    end else if(CSmode==2) begin
+    end else if(CSmode==4) begin//WS load from down
         weight <= input_down;
         output_up <= input_down;
-    end else if(CSmode==3) begin//右方WS computation
+    end else if(CSmode==5) begin//右方WS computation
         if(((sizex-(penumx%sizex))%kernelsize==0) && ((sizey-(penumy%sizey))%kernelsize==0))begin//如果是最右下那個滿足兩種條件的PE, these condition probably have logic error
             result <= result + ((input_up[7:0]*weight) + input_left) + input_up[24:8];
         end else begin
@@ -288,7 +317,7 @@ always @(posedge clk or posedge reset) begin//PE operation
                 output_right <= input_up[7:0]*weight + input_left;
             end
         end
-    end else if(CSmode==4) begin//下方WS computation
+    end else if(CSmode==6) begin//下方WS computation
         if(((sizex-(penumx%sizex))%kernelsize==0) && ((sizey-(penumy%sizey))%kernelsize==0))begin//如果是最右下那個滿足兩種條件的PE
             result <= result + (input_left[7:0]*weight)+input_up + input_left[24:8];
         end else begin
@@ -319,5 +348,24 @@ always @(posedge clk or posedge reset) begin//PE operation
         output_up <= output_up;
     end
 end
+
+endmodule
+
+module Controller(clk,reset,penumx,penumy,sizex,sizey,kernelsize,workstate,tsv_out);
+
+input clk,reset;
+input[1:0]  workstate;//開始給資料就變成1 運算結束變0
+input[24:0] penumx,penumy,sizex,sizey,kernelsize;
+output[24:0] tsv_out;
+
+wire [24:0] output_right[1:0];
+wire [24:0] output_left[1:0];
+wire [24:0] output_down[1:0];
+wire [24:0] output_up[1:0];
+wire [24:0] result[1:0];
+
+
+PE pe11(25'd1,25'd2,25'd3,25'd4,output_left[0],output_right[0],output_up[0],output_down[0],workstate[0],clk,reset,25'd1,25'd1,25'd12,25'd12,25'd3,result[0]);
+PE_tsv pe12(25'd1,25'd2,25'd3,25'd4,output_left[1],output_right[1],output_up[1],output_down[1],workstate[1],clk,25'd9,tsv_out,reset,25'd1,25'd1,25'd12,25'd12,25'd3,result[1]);
 
 endmodule
