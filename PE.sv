@@ -11,9 +11,9 @@ mode4 = WS computation down side
 mode7 = OS
 */
 input clk,reset,workstate;
-input [24:0] input_left,input_right,input_up,input_down,penumx,penumy,sizex,sizey,kernelsize;
+input [41:0] input_left,input_right,input_up,input_down,penumx,penumy,sizex,sizey,kernelsize;
 
-output reg [24:0] output_right,output_left,output_down,output_up,result;//first 8 bit is input data, last 17 bit is computation result
+output reg [41:0] output_right,output_left,output_down,output_up,result;//first 8 bit is input data, last 17 bit is computation result
 
 reg[2:0] NSmode,CSmode;
 reg[15:0] weight, OS_counter;
@@ -104,8 +104,29 @@ always @(posedge clk or posedge reset) begin//PE操作
         output_up <= 0;
     end else if(CSmode==7) begin//OS
         output_right[7:0] <= input_left[7:0];
-        output_right[24:8] <= input_left[7:0]*input_up+input_left[24:8];
-        output_down <= input_up;
+        if(penumy%sizey==kernelsize*kernelsize)begin//如果是在最下方的OS不會有往下給的輸出
+            if(OS_counter >= 3*kernelsize*kernelsize)begin
+                output_right[24:8] <= input_left[24:8];
+            end else  begin//OS運作結束之前都會在PE內累計運算結果
+                if(OS_counter == 3*kernelsize*kernelsize-1)begin
+                    output_right[24:8] <= result + input_left[7:0]*input_up;
+                end else begin
+                    result <= result + input_left[7:0]*input_up;
+                end
+            end
+            output_down <= 0;
+        end else begin//不是最下方的OS
+            if(OS_counter >= 3*kernelsize*kernelsize)begin
+                output_right[24:8] <= input_left[24:8];
+            end else  begin//OS運作結束之前都會在PE內累計運算結果
+                if(OS_counter == 3*kernelsize*kernelsize-1)begin
+                    output_right[24:8] <= result + input_left[7:0]*input_up;
+                end else begin
+                    result <= result + input_left[7:0]*input_up;
+                end
+            end
+            output_down <= input_up;
+        end
     end else if(CSmode==1) begin//WS load from right
         weight <= input_right;
         output_left <= input_right;
@@ -114,12 +135,17 @@ always @(posedge clk or posedge reset) begin//PE操作
         output_up <= input_down;
     end else if(CSmode==3) begin//右方WS computation
         if(((sizex-(penumx%sizex))%kernelsize==0) && ((sizey-(penumy%sizey))%kernelsize==0))begin//如果是最右下那個滿足兩種條件的PE, these condition probably have logic error
-            result <= result + ((input_up[7:0]*weight) + input_left) + input_left[24:8];//左邊運算和
+            output_right[41:25] <= output_right[41:25] + ((input_up[7:0]*weight) + input_left) + input_left[24:8];//左邊運算和
         end else begin
+            output_right[41:25] <= input_left[41:25];//傳送左邊另一塊WS運算和 Controller會在需要的時候自己拿
             if((sizex-(penumx%sizex))%kernelsize==0)begin//如果在WS中是最右的 不會有往右的輸出 會往下傳送運算結果以及input
-                output_right <= 0; 
-                output_down[7:0] <= input_up[7:0];
-                output_down[24:8] <= ((input_up[7:0]*weight)+input_left)+input_up[24:8];//把左邊傳來的結果加上這次自己運算的結果往右傳
+                if(OS_counter < 3*kernelsize*kernelsize+kernelsize)begin//如果OS算完的結果還沒傳過來
+                    output_right <= 0; 
+                    output_down[7:0] <= input_up[7:0];
+                    output_down[24:8] <= ((input_up[7:0]*weight)+input_left)+input_up[24:8];//把上面傳來的結果加上這次自己運算的結果往下傳
+                end else begin//把OS運算結果往右傳
+                    output_right[24:8] <= input_left[24:8];
+                end
             end else if((sizey-(penumy%sizey))%kernelsize==0) begin//如果在WS中是最下的 不會有往下的輸出 
                 output_down <= 0;
                 output_right[7:0] <= input_left[7:0];
@@ -130,15 +156,22 @@ always @(posedge clk or posedge reset) begin//PE操作
         end
     end else if(CSmode==4) begin//下方WS computation
         if(((sizex-(penumx%sizex))%kernelsize==0) && ((sizey-(penumy%sizey))%kernelsize==0))begin//如果是最右下那個滿足兩種條件的PE
-            result <= result + (input_left[7:0]*weight)+input_up + input_left[24:8];
+            output_down[41:25] <= output_down[41:25] + (input_left[7:0]*weight)+input_up + input_left[24:8];//會不斷累積運算結果
         end else begin
+            output_down[41:25] <= input_down[41:25];//單純傳送前一塊WS的最終結果
             if((sizex-(penumx%sizex))%kernelsize==0)begin//如果在WS中是最右的 不會有往右的輸出
                 output_down <= (input_left[7:0]*weight)+input_up;
                 output_right <= 0; 
             end else if((sizey-(penumy%sizey))%kernelsize==0) begin//如果在WS中是最下的 不會有往下的輸出 會往右傳送運算結果以及input
-                output_down <= 0;
-                output_right[7:0] <= input_left[7:0];
-                output_right[24:8] <= ((input_left[7:0]*weight)+input_up)+input_left[24:8];//把左邊傳來的結果加上這次自己運算的結果往右傳
+                if(OS_counter < 3*kernelsize*kernelsize+kernelsize)begin//如果OS算完的結果還沒傳過來
+                    output_down <= 0;
+                    output_right[7:0] <= input_left[7:0];
+                    output_right[24:8] <= ((input_left[7:0]*weight)+input_up)+input_left[24:8];//把左邊傳來的結果加上這次自己運算的結果往右傳
+                end else begin
+                    output_down <= 0;
+                    output_right[7:0] <= input_left[7:0];
+                    output_right[24:8] <= input_left[24:8];//只傳送OS的運算結果
+                end
             end else begin
                 output_down <= (input_left*weight)+input_up;
                 output_right[7:0] <= input_left[7:0];
@@ -174,9 +207,9 @@ mode5 = WS computation right side
 mode6 = WS computation down side
 */
 input clk,reset,workstate;
-input [24:0] input_left,input_right,input_up,input_down,penumx,penumy,sizex,sizey,kernelsize,tsv_in;
+input [41:0] input_left,input_right,input_up,input_down,penumx,penumy,sizex,sizey,kernelsize,tsv_in;
 
-output reg [24:0] output_right,output_left,output_down,output_up,tsv_out,result;//first 8 bit is input data, last 17 bit is computation result
+output reg [41:0] output_right,output_left,output_down,output_up,tsv_out,result;//first 8 bit is input data, last 17 bit is computation result
 
 reg[2:0] NSmode,CSmode;
 reg[15:0] weight, OS_counter;
@@ -281,22 +314,54 @@ always @(posedge clk or posedge reset) begin//PE operation
         output_up <= 0;
     end else if(CSmode==1) begin//OS 
         output_right[7:0] <= input_left[7:0];
-        output_right[24:8] <= input_left[7:0]*input_up+input_left[24:8];
-        if(penumy%sizey==kernelsize)begin//如果是在最下方的OS不會有往下給的輸出
+        if(penumy%sizey==kernelsize*kernelsize)begin//如果是在最下方的OS不會有往下給的輸出
+            if(OS_counter >= 3*kernelsize*kernelsize)begin
+                output_right[24:8] <= input_left[24:8];
+            end else  begin//OS運作結束之前都會在PE內累計運算結果
+                if(OS_counter == 3*kernelsize*kernelsize-1)begin
+                    output_right[24:8] <= result + input_left[7:0]*input_up;
+                end else begin
+                    result <= result + input_left[7:0]*input_up;
+                end
+            end
             output_down <= 0;
-        end else begin
+        end else begin//不是最下方的OS
+            if(OS_counter >= 3*kernelsize*kernelsize)begin
+                output_right[24:8] <= input_left[24:8];
+            end else  begin//OS運作結束之前都會在PE內累計運算結果
+                if(OS_counter == 3*kernelsize*kernelsize-1)begin
+                    output_right[24:8] <= result + input_left[7:0]*input_up;
+                end else begin
+                    result <= result + input_left[7:0]*input_up;
+                end
+            end
             output_down <= input_up;
         end
-        output_down <= input_up;
     end else if(CSmode==2)begin
         if((penumx%sizex==1))begin//左方OS第一個PE TSV吃input
+            if(OS_counter >= 3*kernelsize*kernelsize)begin
+                output_right[24:8] <= input_left[24:8];
+            end else  begin//OS運作結束之前都會在PE內累計運算結果
+                if(OS_counter == 3*kernelsize*kernelsize-1)begin
+                    output_right[24:8] <= result + tsv_in*input_up;
+                end else begin
+                    result <= result + tsv_in*input_up;
+                end
+            end
             output_right[7:0] <= tsv_in;
-            output_right[24:8] <= tsv_in*input_up;
             output_down <= input_up;//傳送weight
         end else begin//上方OS第一個PE TSV吃weight
+            if(OS_counter >= 3*kernelsize*kernelsize)begin
+                output_right[24:8] <= input_left[24:8];
+            end else  begin//OS運作結束之前都會在PE內累計運算結果
+                if(OS_counter == 3*kernelsize*kernelsize-1)begin
+                    output_right[24:8] <= result + input_left[7:0]*tsv_in;
+                end else begin
+                    result <= result + input_left[7:0]*tsv_in;
+                end
+            end
             output_down <= tsv_in;
             output_right[7:0] <= input_left[7:0];
-            output_right[24:8] <= input_left[7:0]*tsv_in+input_left[24:8];
         end
     end else if(CSmode==3) begin//WS load from right
         weight <= input_right;
@@ -306,8 +371,9 @@ always @(posedge clk or posedge reset) begin//PE operation
         output_up <= input_down;
     end else if(CSmode==5) begin//右方WS computation
         if(((sizex-(penumx%sizex))%kernelsize==0) && ((sizey-(penumy%sizey))%kernelsize==0))begin//如果是最右下那個滿足兩種條件的PE, these condition probably have logic error
-            result <= result + ((input_up[7:0]*weight) + input_left) + input_up[24:8];
+            output_right[41:25] <= output_right[41:25] + ((input_up[7:0]*weight) + input_left) + input_left[24:8];//左邊運算和
         end else begin
+            output_right[41:25] <= input_left[41:25];//傳送左邊另一塊WS運算和 Controller會在需要的時候自己拿
             if((sizex-(penumx%sizex))%kernelsize==0)begin//如果在WS中是最右的 不會有往右的輸出 會往下傳送運算結果以及input
                 if(OS_counter < 3*kernelsize*kernelsize+kernelsize)begin//如果OS算完的結果還沒傳過來
                     output_right <= 0; 
@@ -326,8 +392,9 @@ always @(posedge clk or posedge reset) begin//PE operation
         end
     end else if(CSmode==6) begin//下方WS computation
         if(((sizex-(penumx%sizex))%kernelsize==0) && ((sizey-(penumy%sizey))%kernelsize==0))begin//如果是最右下那個滿足兩種條件的PE
-            result <= result + (input_left[7:0]*weight)+input_up + input_left[24:8];
+            output_down[41:25] <= output_down[41:25] + (input_left[7:0]*weight)+input_up + input_left[24:8];//會不斷累積運算結果
         end else begin
+            output_down[41:25] <= input_down[41:25];//單純傳送前一塊WS的最終結果
             if((sizex-(penumx%sizex))%kernelsize==0)begin//如果在WS中是最右的 不會有往右的輸出
                 output_down <= (input_left[7:0]*weight)+input_up;
                 output_right <= 0; 
@@ -372,9 +439,9 @@ mode5 = WS computation right side
 mode6 = WS computation down side
 */
 input clk,reset,workstate;
-input [24:0] input_left,input_right,input_up,input_down,penumx,penumy,sizex,sizey,kernelsize,tsv_in1,tsv_in2;
+input [41:0] input_left,input_right,input_up,input_down,penumx,penumy,sizex,sizey,kernelsize,tsv_in1,tsv_in2;
 
-output reg [24:0] output_right,output_left,output_down,output_up,tsv_out,result;//first 8 bit is input data, last 17 bit is computation result
+output reg [41:0] output_right,output_left,output_down,output_up,tsv_out,result;//first 8 bit is input data, last 17 bit is computation result
 
 reg[2:0] NSmode,CSmode;
 reg[15:0] weight, OS_counter;
@@ -479,22 +546,63 @@ always @(posedge clk or posedge reset) begin//PE operation
         output_up <= 0;
     end else if(CSmode==1) begin//OS 
         output_right[7:0] <= input_left[7:0];
-        output_right[24:8] <= input_left[7:0]*input_up+input_left[24:8];
-        output_down <= input_up;
+        if(penumy%sizey==kernelsize*kernelsize)begin//如果是在最下方的OS不會有往下給的輸出
+            if(OS_counter >= 3*kernelsize*kernelsize)begin
+                output_right[24:8] <= input_left[24:8];
+            end else  begin//OS運作結束之前都會在PE內累計運算結果
+                if(OS_counter == 3*kernelsize*kernelsize-1)begin
+                    output_left[24:8] <= result + input_left[7:0]*input_up;
+                end else begin
+                    result <= result + input_left[7:0]*input_up;
+                end
+            end
+            output_down <= 0;
+        end else begin//不是最下方的OS
+            if(OS_counter >= 3*kernelsize*kernelsize)begin
+                output_right[24:8] <= input_left[24:8];
+            end else  begin//OS運作結束之前都會在PE內累計運算結果
+                if(OS_counter == 3*kernelsize*kernelsize-1)begin
+                    output_right[24:8] <= result + input_left[7:0]*input_up;
+                end else begin
+                    result <= result + input_left[7:0]*input_up;
+                end
+            end
+            output_down <= input_up;
+        end
     end else if(CSmode==2)begin
         if((penumx%sizex ==1) && (penumy%sizey ==1))begin//如果是最左上那個PE
+            if(OS_counter >= 3*kernelsize*kernelsize)begin
+                output_right[24:8] <= result;
+            end else  begin//OS運作結束之前都會在PE內累計運算結果
+                result <= result + tsv_in1*tsv_in2;
+            end
             output_right[7:0] <= tsv_in1;//pass input
-            output_right[24:8] <= tsv_in1*tsv_in2;
             output_down <= tsv_in2;//pass weight
         end else begin
             if((penumx%sizex==1))begin//左方OS第一個PE TSV吃input
+                if(OS_counter >= 3*kernelsize*kernelsize)begin
+                    output_right[24:8] <= input_left[24:8];
+                end else  begin//OS運作結束之前都會在PE內累計運算結果
+                    if(OS_counter == 3*kernelsize*kernelsize-1)begin
+                        output_right[24:8] <= result + tsv_in1*input_up;
+                    end else begin
+                        result <= result + tsv_in1*input_up;
+                    end
+                end
                 output_right[7:0] <= tsv_in1;
-                output_right[24:8] <= tsv_in1*input_up+input_left[24:8];
                 output_down <= input_up;//傳送weight
             end else begin//上方OS第一個PE TSV吃weight
+                if(OS_counter >= 3*kernelsize*kernelsize)begin
+                    output_right[24:8] <= input_left[24:8];
+                end else  begin//OS運作結束之前都會在PE內累計運算結果
+                    if(OS_counter == 3*kernelsize*kernelsize-1)begin
+                        output_right[24:8] <= result + input_left[7:0]*tsv_in1;
+                    end else begin
+                        result <= result + input_left[7:0]*tsv_in1;
+                    end
+                end
                 output_down <= tsv_in1;
                 output_right[7:0] <= input_left[7:0];
-                output_right[24:8] <= input_left[7:0]*tsv_in1+input_left[24:8];
             end
         end
     end else if(CSmode==3) begin//WS load from right
@@ -505,8 +613,9 @@ always @(posedge clk or posedge reset) begin//PE operation
         output_up <= input_down;
     end else if(CSmode==5) begin//右方WS computation
         if(((sizex-(penumx%sizex))%kernelsize==0) && ((sizey-(penumy%sizey))%kernelsize==0))begin//如果是最右下那個滿足兩種條件的PE, these condition probably have logic error
-            result <= result + ((input_up[7:0]*weight) + input_left) + input_up[24:8];
+            output_right[41:25] <= output_right[41:25] + ((input_up[7:0]*weight) + input_left) + input_left[24:8];//左邊運算和
         end else begin
+            output_right[41:25] <= input_left[41:25];//傳送左邊另一塊WS運算和 Controller會在需要的時候自己拿
             if((sizex-(penumx%sizex))%kernelsize==0)begin//如果在WS中是最右的 不會有往右的輸出 會往下傳送運算結果以及input
                 if(OS_counter < 3*kernelsize*kernelsize+kernelsize)begin//如果OS算完的結果還沒傳過來
                     output_right <= 0; 
@@ -525,8 +634,9 @@ always @(posedge clk or posedge reset) begin//PE operation
         end
     end else if(CSmode==6) begin//下方WS computation
         if(((sizex-(penumx%sizex))%kernelsize==0) && ((sizey-(penumy%sizey))%kernelsize==0))begin//如果是最右下那個滿足兩種條件的PE
-            result <= result + (input_left[7:0]*weight)+input_up + input_left[24:8];
+            output_down[41:25] <= output_down[41:25] + (input_left[7:0]*weight)+input_up + input_left[24:8];//會不斷累積運算結果
         end else begin
+            output_down[41:25] <= input_down[41:25];//單純傳送前一塊WS的最終結果
             if((sizex-(penumx%sizex))%kernelsize==0)begin//如果在WS中是最右的 不會有往右的輸出
                 output_down <= (input_left[7:0]*weight)+input_up;
                 output_right <= 0; 
@@ -557,22 +667,32 @@ end
 
 endmodule
 
-module Controller(clk,reset,workstate,tsv_out);//,penumx,penumy,sizex,sizey,kernelsize
+module Controller(clk,reset,workstate,kernelsize,,tsv_out);//,penumx,penumy,sizex,sizey,kernelsize
 
 input clk,reset;
 input  workstate;//開始給資料就變成1 運算結束變0
+input [41:0] kernelsize;
 // input[24:0] penumx,penumy,sizex,sizey,kernelsize;
-output[24:0] tsv_out;
+output[41:0] tsv_out;
 
-logic [24:0] output_right[3:0];
-logic [24:0] output_left[3:0];
-logic [24:0] output_down[3:0];
-logic [24:0] output_up[3:0];
-logic [24:0] result[3:0];
 
-PE_dual_tsv pe11(25'd1,25'd2,25'd3,25'd4,output_left[0],output_right[0],output_up[0],output_down[0],workstate,clk,25'd3,25'd3,tsv_out,reset,25'd1,25'd1,25'd12,25'd12,25'd3,result[0]);
-PE_tsv pe21(25'd1,25'd2,25'd3,output_down[0],output_left[1],output_right[1],output_up[1],output_down[1],workstate,clk,25'd9,tsv_out,reset,25'd2,25'd1,25'd12,25'd12,25'd3,result[1]);
-PE pe22(output_right[1],25'd2,25'd3,25'd4,output_left[2],output_right[2],output_up[2],output_down[2],workstate,clk,reset,25'd2,25'd2,25'd12,25'd12,25'd3,result[2]);
-PE pe23(output_right[2],25'd2,25'd3,25'd4,output_left[3],output_right[3],output_up[3],output_down[3],workstate,clk,reset,25'd2,25'd3,25'd12,25'd12,25'd3,result[3]);
+
+logic [41:0] output_right[8:0];
+logic [41:0] output_left[8:0];
+logic [41:0] output_down[8:0];
+logic [41:0] output_up[8:0];
+logic [41:0] result[8:0];
+
+PE_dual_tsv pe11(42'd1,42'd2,42'd3,42'd4,output_left[0],output_right[0],output_up[0],output_down[0],workstate,clk,42'd3,42'd3,tsv_out,reset,42'd1,42'd1,42'd12,42'd12,kernelsize,result[0]);
+
+PE_tsv pe21(output_right[0],42'd2,42'd3,42'd4,output_left[1],output_right[1],output_up[1],output_down[1],workstate,clk,42'd9,tsv_out,reset,42'd2,42'd1,42'd12,42'd12,kernelsize,result[1]);
+PE_tsv pe31(output_right[1],42'd2,42'd3,42'd4,output_left[2],output_right[2],output_up[2],output_down[2],workstate,clk,42'd9,tsv_out,reset,42'd3,42'd1,42'd12,42'd12,kernelsize,result[2]);
+PE_tsv pe12(42'd1,42'd2,output_down[0],42'd4,output_left[3],output_right[3],output_up[3],output_down[3],workstate,clk,42'd9,tsv_out,reset,42'd1,42'd2,42'd12,42'd12,kernelsize,result[3]);
+PE_tsv pe13(42'd1,42'd2,output_down[3],42'd4,output_left[4],output_right[4],output_up[4],output_down[4],workstate,clk,42'd9,tsv_out,reset,42'd1,42'd3,42'd12,42'd12,kernelsize,result[4]);
+
+PE pe22(output_right[3],42'd2,output_down[1],42'd4,output_left[5],output_right[5],output_up[5],output_down[5],workstate,clk,reset,42'd2,42'd2,42'd12,42'd12,kernelsize,result[5]);
+PE pe23(output_right[4],42'd2,output_down[5],42'd4,output_left[6],output_right[6],output_up[6],output_down[6],workstate,clk,reset,42'd2,42'd3,42'd12,42'd12,kernelsize,result[6]);
+PE pe32(output_right[5],42'd2,output_down[2],42'd4,output_left[7],output_right[7],output_up[7],output_down[7],workstate,clk,reset,42'd2,42'd2,42'd12,42'd12,kernelsize,result[7]);
+PE pe33(output_right[6],42'd2,output_down[7],42'd4,output_left[8],output_right[8],output_up[8],output_down[8],workstate,clk,reset,42'd2,42'd2,42'd12,42'd12,kernelsize,result[8]);
 
 endmodule
