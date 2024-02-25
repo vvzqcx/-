@@ -748,25 +748,197 @@ endmodule
 
 
 
-module Controller(input clk,input rst,input[41:0] kernelsize,output logic[41:0]tsv_out[8:0][8:0]);//,penumx,penumy,size,kernelsize
+module Controller(input clk, input rst, input integer kernelsize[1:0], input integer input_totalnum, output logic[41:0]tsv_out[8:0][8:0]);//,penumx,penumy,size,kernelsize
 // input[24:0] penumx,penumy,size,kernelsize;
+//f n是state abcdr是OSnum jp是OS counter
 
 logic [41:0] OSIS[15:0];//OS sram input
 logic [41:0] OSWS[15:0];//OS sram weight
 logic [5:0]  OSISnum[15:0][15:0];//用來決定OS sram input的位置讀到哪的參數
 logic [5:0]  OSWSnum[15:0][15:0];//用來決定OS sram weight的位置讀到哪的參數
+logic [15:0] OS_counter[1:0][15:0];
+logic [15:0] state[2];
 
-logic [41:0] WSIS[15:0];//WS sram input
-logic [41:0] WSWS[15:0];//WS sram weight
-logic [5:0]  WSISnum[15:0];//用來決定WS sram input的位置讀到哪的參數
-logic [5:0]  WSWSnum[15:0];//用來決定WS sram weight的位置讀到哪的參數
+assign state[0] = state0;
+assign state[1] = state1;
 
-logic [15:0] size;
+logic [15:0] size[1:0];
 logic [15:0] PE_size;
+assign PE_size = 16'd16;
 
-logic [10:0] remain_conv_num;//看剩下幾個input可以進行運算(還要考慮WS...)
-logic [15:0] OS_counter[15:0];
-logic [15:0] state;//這樣才能用每個bit or的操作
+always_comb begin//決定切割後的PE大小
+    for(int a=0 ; a<1 ; a=a+1)begin
+        if(PE_size/2 >= kernelsize[a]*kernelsize[a])begin
+            if(PE_size/4 >= kernelsize[a]*kernelsize[a])begin
+                size[a] = PE_size/4;
+            end else begin
+                size[a] = PE_size/2;
+            end
+        end else begin
+            size[a] = PE_size;
+        end
+    end
+end
+
+logic [15:0] state0,state1;//這樣才能用每個bit or的操作
+integer f0;
+integer n0;
+always_ff @( posedge clk or posedge rst ) begin//state 操作
+    if(rst)begin
+        for(f0=0 ; f0<16 ; f0=f0+1)begin
+            state0[f0] <= 0;
+        end
+    end else begin
+        for(n0=0 ; n0<16 ; n0=n0+1) begin
+            if(state0[n0] == 0 && total_num >= 0*(PE_size/size[0])*(PE_size/size[0])+n0%16)begin//如果PE現在沒有再進行運算而且剩下能算的input數量夠多
+                if(PE_size/size[0]==4)begin
+                    state0[n0] <= 1;
+                end else if(PE_size/size[0]==2)begin
+                    if(n0%4==0)begin
+                        state0[n0] <= 1;state0[n0+1] <= 1;state0[n0+2] <= 1;state0[n0+3] <= 1;
+                    end else begin
+                        state0[n0] <= state0[n0];state0[n0+1] <= state0[n0+1];
+                        state0[n0+2] <= state0[n0+2];state0[n0+3] <= state0[n0+3];
+                    end
+                end else begin
+                    if(n0==0)begin
+                        state0[n0] <= 1;state0[n0+1] <= 1;state0[n0+2] <= 1;state0[n0+3] <= 1;state0[n0+4] <= 1;state0[n0+5] <= 1;state0[n0+6] <= 1;state0[n0+7] <= 1;
+                        state0[n0+8] <= 1;state0[n0+9] <= 1;state0[n0+10] <= 1;state0[n0+11] <= 1;state0[n0+12] <= 1;state0[n0+13] <= 1;state0[n0+14] <= 1;state0[n0+15] <= 1;
+                    end
+                end
+            end else begin
+                if(OS_counter[0][n0] > 4*kernelsize[0]*kernelsize[0])begin
+                    state0[n0] <= 0;
+                end else begin
+                    state0[n0] <= state0[n0];
+                end
+            end
+        end
+    end
+end
+
+integer f1;
+integer n1;
+always_ff @( posedge clk or posedge rst ) begin//state 操作
+    if(rst)begin
+        for(f1=0 ; f1<16 ; f1=f1+1)begin
+            state1[f1] <= 0;
+        end
+    end else begin
+        for(n1=0 ; n1<16 ; n1=n1+1) begin
+            if(state1[n1] == 0 && total_num >= 1*(PE_size/size[1])*(PE_size/size[1])+n1%16)begin//如果PE現在沒有再進行運算而且剩下能算的input數量夠多
+                if(PE_size/size[1]==4)begin
+                    state1[n1] <= 1;
+                end else if(PE_size/size[1]==2)begin
+                    if(n1%4==0)begin
+                        state1[n1] <= 1;state1[n1+1] <= 1;state1[n1+2] <= 1;state1[n1+3] <= 1;
+                    end else begin
+                        state1[n1] <= state1[n1];state1[n1+1] <= state1[n1+1];
+                        state1[n1+2] <= state1[n1+2];state1[n1+3] <= state1[n1+3];
+                    end
+                end else begin
+                    if(n1==0)begin
+                        state1[n1] <= 1;state1[n1+1] <= 1;state1[n1+2] <= 1;state1[n1+3] <= 1;state1[n1+4] <= 1;state1[n1+5] <= 1;state1[n1+6] <= 1;state1[n1+7] <= 1;
+                        state1[n1+8] <= 1;state1[n1+9] <= 1;state1[n1+10] <= 1;state1[n1+11] <= 1;state1[n1+12] <= 1;state1[n1+13] <= 1;state1[n1+14] <= 1;state1[n1+15] <= 1;
+                    end
+                end
+            end else begin
+                if(OS_counter[0][n1] > 4*kernelsize[1]*kernelsize[1])begin
+                    state1[n1] <= 0;
+                end else begin
+                    state1[n1] <= state1[n1];
+                end
+            end
+        end
+    end
+end
+
+logic signal[2][16][4];
+always_comb begin : blockName
+    for (int s=0 ; s<2 ; s=s+1) begin//第幾層Layer
+        for (int s1=0 ; s1<16 ; s1=s1+1) begin//第幾個PE block
+            for (int s2=0 ; s2<5 ; s2=s2+1) begin//4是PE切割的大小
+                if ( ((s2+(s1%(PE_size/size[s]))*size[s])) < OS_counter[s][s1] && (size[s]-s2 > WS_width[s]*kernelsize[s])) //OS而且換成她輸出了
+                    signal[s][s1][s2] = 1;
+                else begin
+                    if ( ((size[s]-s2)%kernelsize[s]) <= OS_counter[s][s1]-WS_width[s] && (size[s]-s2 <= WS_width[s]*kernelsize[s])) begin
+                        signal[s][s1][s2] = 1;
+                    end else 
+                        signal[s][s1][s2] = 0;
+                end
+            end
+        end
+    end
+end
+
+integer a0;
+integer b0;
+integer c0;
+integer d0[15:0][15:0];//用來看是不是數到三個數需要換行了 d0[PE part][inside]
+integer r;
+always_ff @(posedge clk or posedge rst) begin//調控第一個PE小區的Num
+    if(rst)begin
+        for ( r=0 ; r<16 ; r=r+1) begin
+            c0<=0;
+            for (a0=0 ; a0<16 ; a0=a0+1) begin
+                if(a0 == 0)begin
+                    OSISnum[r][0]=(0*(6*kernelsize[r]*kernelsize[r])/(16-kernelsize[r])*6)+(0*(6*kernelsize[r]*kernelsize[r])%(6-kernelsize[r]))+r*kernelsize[r]*kernelsize[r];
+                    OSWSnum[r][0]=(0*(6*kernelsize[r]*kernelsize[r])/(16-kernelsize[r])*6)+(0*(6*kernelsize[r]*kernelsize[r])%(6-kernelsize[r]))+r*kernelsize[r]*kernelsize[r];
+                end else begin
+                    OSISnum[r][a0]=0;
+                    OSWSnum[r][a0]=0;
+                end
+                d0[a0][r]<=0;
+            end
+        end
+    end else begin
+        for ( r=0 ; r<16 ; r=r+1) begin
+            if(state0[r])begin
+                for (b0=0 ; b0<16 ; b0=b0+1) begin
+                    if(b0 == OS_counter[0][r] && b0!=0)begin//換到他輸入
+                        if((6-(OSISnum[r][b0-1]+1))==(kernelsize[r]-1))begin
+                            OSISnum[r][b0] <= OSISnum[r][b0-1]+OS_counter[0][r]-b0+c0+1;
+                            OSWSnum[r][b0] <= OSISnum[r][b0-1]+OS_counter[0][r]-b0+c0+1;
+                            c0=c0+kernelsize[r]-1;
+                            d0[r][b0]<=d0[r][b0]+1;
+                        end else begin
+                            OSISnum[r][b0] <= OSISnum[r][b0-1]+OS_counter[0][r]-b0+c0+1;
+                            OSWSnum[r][b0] <= OSWSnum[r][b0-1]+OS_counter[0][r]-b0+c0+1;
+                            d0[r][b0]<=d0[r][b0]+1;
+                        end
+                    end
+                    else if(b0 < OS_counter[0][0] || b0==0)begin
+                        if((d0[r][b0])%(kernelsize[0])==0 && (d0[r][b0]) !=0 )begin//如果三個要換行
+                            OSISnum[r][b0] <= OSISnum[r][b0]+6-kernelsize[r]+1;
+                            OSWSnum[r][b0] <= OSWSnum[r][b0]+6-kernelsize[r]+1;
+                            d0[r][b0]<=d0[r][b0]+1;
+                        end else begin
+                            OSISnum[r][b0] <= OSISnum[r][b0]+1;
+                            OSWSnum[r][b0] <= OSWSnum[r][b0]+1;
+                            d0[r][b0]<=d0[r][b0]+1;
+                        end
+                    end
+                    else begin
+                        OSISnum[r][b0] <= OSISnum[r][b0];
+                        OSWSnum[r][b0] <= OSWSnum[r][b0];
+                    end
+                end
+            end else begin
+                c0<=0;
+                for (a0=0 ; a0<16 ; a0=a0+1) begin
+                    if(a0 == 0)begin
+                        OSISnum[r][0]=(0*(6*kernelsize[r]*kernelsize[r])/(6-kernelsize[r])*16)+(0*(6*kernelsize[r]*kernelsize[r])%(6-kernelsize[r]))+r*kernelsize[r]*kernelsize[r];
+                        OSWSnum[r][0]=(0*(6*kernelsize[r]*kernelsize[r])/(6-kernelsize[r])*16)+(0*(6*kernelsize[r]*kernelsize[r])%(6-kernelsize[r]))+r*kernelsize[r]*kernelsize[r];
+                    end else begin
+                        OSISnum[r][a0]=0;
+                        OSWSnum[r][a0]=0;
+                    end
+                    d0[a0][r]<=0;
+                end
+            end
+        end
+    end
+end
 
 logic [41:0] output_right[8:0][8:0];
 logic [41:0] output_left[8:0][8:0];
@@ -774,80 +946,117 @@ logic [41:0] output_down[8:0][8:0];
 logic [41:0] output_up[8:0][8:0];
 logic [41:0] result[8:0][8:0];
 
-assign PE_size = 16'd6;
+logic [41:0] WSIS[15:0];//WS sram input
+logic [41:0] WSWS[15:0];//WS sram weight
+logic [5:0]  WSISnum[15:0];//用來決定WS sram input的位置讀到哪的參數
+logic [5:0]  WSWSnum[15:0];//用來決定WS sram weight的位置讀到哪的參數
 
-integer m;
-logic operation[15:0];
-always_comb begin //指定WS OS input
-    for ( m=0 ; m<16 ; m=m+1) begin
-        if(OS_counter[m] > (16-(kernelsize*kernelsize))/kernelsize*kernelsize)begin
-            operation[m] = 1;
-        end
-        else begin
-            operation[m]=0;
-        end
+integer total_num;//總共有多少可以算
+integer WS_width[2],WS_length[2];
+integer conputation_num[2];
+
+always @(*) begin
+    for (int kj=0 ; kj<=1 ; kj=kj+1) begin
+        WS_width[kj] = (size[kj]-(kernelsize[kj]*kernelsize[kj]))/kernelsize[kj];
+        WS_length[kj] = size[kj]/kernelsize[kj]; 
+        conputation_num[kj] = WS_length[kj]*WS_width[kj]*2-(WS_width[kj]*WS_width[kj]);
     end
 end
 
-integer k, k1;
-
-always_ff @(  posedge clk or posedge rst  ) begin//state運作
+always @(state0 or state1 or rst) begin//用來看現在還剩下幾個 但只能算同時會完成所有運算的情況
     if(rst)begin
-        for ( k=0 ; k<16 ; k=k+1) begin
-            state[k] <= 0;
-        end
+        total_num = input_totalnum;
     end else begin
-        
+        total_num = total_num-
+        state0[0]+state0[1]+state0[2]+state0[3]+state0[4]+state0[5]+
+        state0[6]+state0[7]+state0[8]+state0[9]+state0[10]+
+        state0[11]+state0[12]+state0[13]+state0[14]+state0[15]+
+        state1[0]+state1[1]+state1[2]+state1[3]+state1[4]+state1[5]+
+        state1[6]+state1[7]+state1[8]+state1[9]+state1[10]+
+        state1[11]+state1[12]+state1[13]+state1[14]+state1[15];
+    end
+end
+
+integer wa0;
+integer wb0;
+integer wc0;
+integer wd0[15:0][15:0];//用來看是不是數到三個數需要換行了 d0[PE part][inside]
+integer wr;
+always_ff @(posedge clk or posedge rst) begin//調控第一個PE小區的Num
+    if(rst)begin
+        for ( wr=0 ; wr<16 ; wr=wr+1) begin
+            WSISnum[wr][0]=(0*kernelsize[wr]/(16-kernelsize[wr])*16)+(kernelsize[wr]%(16-kernelsize[wr]));
+            WSWSnum[wr][0]=(0*kernelsize[wr]/(16-kernelsize[wr])*16)+(kernelsize[wr]%(16-kernelsize[wr]));
+            wc0<=0;
+            for (wa0=0 ; wa0<16 ; wa0=wa0+1) begin
+                wd0[wa0][wr]<=0;
+            end
+        end
+
+    end else begin
+        for ( wr=0 ; wr<16 ; wr=wr+1) begin
+            if(state[wr])begin
+                for (wb0=0 ; wb0<16 ; wb0=wb0+1) begin
+                    if(wb0 == OS_counter[0][wr] && wb0!=0)begin//換到他輸入
+                        if((16-(WSISnum[wr][wb0-1]))%kernelsize[wr]==0)begin
+                            WSISnum[wr][wb0] <= WSISnum[wr][wb0-1]+OS_counter[0][wr]-wb0+wc0;
+                            WSWSnum[wr][wb0] <= WSISnum[wr][wb0-1]+OS_counter[0][wr]-wb0+wc0;
+                            wc0=wc0+kernelsize[wr]-1;
+                            wd0[wr][wb0]<=wd0[wr][wb0]+1;
+                        end else begin
+                            WSISnum[wr][wb0] <= WSISnum[wr][wb0-1]+OS_counter[0][wr]-wb0+wc0;
+                            WSWSnum[wr][wb0] <= WSWSnum[wr][wb0-1]+OS_counter[0][wr]-wb0+wc0;
+                            wd0[wr][wb0]<=wd0[wr][wb0]+1;
+                        end
+                    end
+                    else if(wb0 < OS_counter[0][0] || wb0==0)begin
+                        if((wd0[wr][wb0]+1)%3==0)begin//如果三個要換行
+                            WSISnum[wr][wb0] <= WSISnum[wr][wb0]+16-kernelsize[wr]+1;
+                            WSWSnum[wr][wb0] <= WSWSnum[wr][wb0]+16-kernelsize[wr]+1;
+                            wd0[wr][wb0]<=wd0[wr][wb0]+1;
+                        end else begin
+                            WSISnum[wr][wb0] <= WSISnum[wr][wb0]+1;
+                            WSWSnum[wr][wb0] <= WSWSnum[wr][wb0]+1;
+                            wd0[wr][wb0]<=wd0[wr][wb0]+1;
+                        end
+                    end
+                    else begin
+                        WSISnum[wr][wb0] <= WSISnum[wr][wb0];
+                        WSWSnum[wr][wb0] <= WSWSnum[wr][wb0];
+                    end
+                end
+            end else begin
+                for (wa0=0 ; wa0<16 ; wa0=wa0+1) begin
+                    WSISnum[wr][wa0]=(0*kernelsize[wr]/(16-kernelsize[wr])*16)+(kernelsize[wr]%(16-kernelsize[wr]));
+                    WSWSnum[wr][wa0]=(0*kernelsize[wr]/(16-kernelsize[wr])*16)+(kernelsize[wr]%(16-kernelsize[wr]));
+                    wc0<=0;
+                    wd0[wr][wa0]<=0;
+                end
+            end
+        end
     end
 end
 
 integer j1,j;
 
-always_ff @( posedge clk or posedge rst ) begin//OS_counter的運作
+always_ff @( posedge clk or posedge rst ) begin//OS_counter的運作 要分成不同Layer進行操作
     if(rst)begin
-        for ( j1=0 ; j1<16 ; j1=j1+1) begin
-            OS_counter[j1] <= 0;
+        for ( j=0 ; j<1 ; j=j+1) begin
+            for ( j1=0 ; j1<16 ; j1=j1+1) begin
+                OS_counter[0][j1] <= 0;
+            end
         end
     end else begin
-        for ( j=0 ; j<16 ; j=j+1) begin
-            if(state[j])begin
-                OS_counter[j] <= OS_counter[j] + 1;
-            end else begin
-                OS_counter[j] <= 0;
+        for ( j=0 ; j<1 ; j=j+1) begin
+            for ( j1=0 ; j1<16 ; j1=j1+1) begin
+                if (state0[j1]) begin
+                    OS_counter[0][j1] <= OS_counter[0][j1]+1;
+                end else 
+                    OS_counter[0][j1] <= 0;
             end
         end
     end
 end
-
-always_ff @( posedge clk or posedge rst ) begin//OS_counter的運作
-    if(rst)begin
-        for ( j=0 ; j<16 ; j=j+1) begin
-            OS_counter[j] <= 0;
-        end
-    end else begin
-        for ( j=0 ; j<16 ; j=j+1) begin
-            if(state[j])begin
-                OS_counter[j] <= OS_counter[j] + 1;
-            end else begin
-                OS_counter[j] <= 0;
-            end
-        end
-    end
-end
-
-always_comb begin//決定切割後的PE大小
-    if(PE_size/2 > kernelsize)begin
-        if(PE_size/4 > kernelsize)begin
-            size = PE_size/4;
-        end else begin
-            size = PE_size/2;
-        end
-    end else begin
-        size = PE_size;
-    end
-end
-
-logic Jamie;//用來決定左下重複PE的地方要給怎樣的輸入
 
 endmodule
 
